@@ -14,3 +14,7 @@ Aims of this analysis:
 - Investigate the differentially expressed genes (DEGs) between two groups: Sl and Control.
 
 - Compare the list of DEGs between different conditions analysed with the control groups: Sl and Ha.
+
+Analysis files: index.tml, index.Rmd
+
+Folders: data, results
