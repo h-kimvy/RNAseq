@@ -1,0 +1,470 @@
+---
+title: "index"
+output:
+  html_document: default
+  pdf_document: default
+date: "2025-06-01"
+---
+Name: Kim Vy Huynh
+Paired with: Chloé Bres-Monvoisin
+
+####Check pwd and version
+```{r}
+setwd("E:/bioinfo/FOR/RNA_seq")
+R.Version()$version.string
+```
+
+##Read sample files and prepare a metadata file
+
+RNA samples: All RNA samples were extracted from Scots pine roots in different treatment conditions. Each treatment has three biological replicates.    
+
+- This analysis: RNA samples were obtained from Scots pine roots incubated with Suillus luteus (Sl) - a mutualistic fungus can offer a buffering protection against pathogen attacks and promote nutrient access and water uptake by enhancing root growth through its influence on gene expression. RNA samples in the mutualistic group (Sl1, Sl2, Sl3) were analysed with RNA samples in the Control group (Ctr1, Ctr2, Ctr3).   
+- Comparison with other treatment group: RNA samples were obtained from Scots pine roots inoculated with Heterobasidion annousm (Ha) (one-month infection) - a pathogen can cause root and stem rot disease. RNA samples in the infected group (Ha1, Ha2, Ha3) were analysed with RNA samples in the Control group (Ctr1, Ctr2, Ctr3).    
+
+Aims of this analysis: 
+
+- Investigate the differentially expressed genes (DEGs) between two groups: Sl and Control.   
+
+- Compare the list of DEGs between different conditions analysed with the control groups: Sl and Ha. 
+
+####Install packages
+```{r}
+#if (!require("BiocManager", quietly = TRUE))
+#    install.packages("BiocManager")
+
+#BiocManager::install("DESeq2",force = TRUE)
+#BiocManager::install("edgeR",force = TRUE)
+```
+
+####Read metadata file
+```{r}
+Mutualistic.targets<-read.delim("./data/fileDesc.txt")
+```
+
+####Change rownames
+```{r}
+rownames(Mutualistic.targets)<-c("Sl1","Sl2","Sl3","Ctr1","Ctr2","Ctr3")
+```
+
+####Load packages
+```{r}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+library(edgeR)
+library(DESeq2)
+```
+
+####Read each data file and check dimension
+```{r}
+Mutualistic.orig <- readDGE(Mutualistic.targets, header=F)
+
+dim(Mutualistic.orig)
+head(Mutualistic.orig)
+```
+
+####Extract counts (dim) dataframe
+```{r}
+Mutualistic.rawCount <- Mutualistic.orig$count
+
+dim(Mutualistic.rawCount)
+head(Mutualistic.rawCount)
+```
+####Build metadata
+```{r}
+sampletype <- factor(c(rep("Sl",3), rep("Ctr", 3)))
+
+meta <- data.frame(sampletype, row.names = colnames(Mutualistic.orig$count))
+colnames(Mutualistic.orig$count)
+
+rownames(meta)
+
+all(colnames(Mutualistic.orig$count) %in% rownames(meta))
+```
+##DESeq2-normalized counts: Median of ratios method
+
+Raw counts are normalized by DESeq2 median of ratios method. 
+
+Principle: This method normalizes sequencing depth and RNA composition (relative abundance of different RNA species) differences for RNA samples without assumming equal total read counts for all samples. 
+
+Calculation: 
+
+- Geometric mean for each gene: Geometric mean of the counts of each gene across all samples is calculated
+
+- Set of ratios for each sample: The count for each gene is divided by that gene's geometric mean -> a set of ratios for each sample is generated
+
+- Size factor per sample: Median of each sample's ratios is taken -> size factor
+
+- Normalization: each raw count is divided by the corresponding sample's size factor: 
+normalized_count = raw_count / size_factor
+
+
+```{r}
+#extract raw counts
+dds <- DESeqDataSetFromMatrix(Mutualistic.orig, colData = meta, design = ~ sampletype)
+
+head(counts(dds))
+```
+####Generate size factors to correct the differences in sequencing depth across samples (normalization): normalized count(ij) = raw count(ij)/size factor(j) (i: gene idx, j: sample idx)
+```{r}
+dds <- estimateSizeFactors(dds) #calculate size factors for each sample using median ratio method 
+sizeFactors(dds)
+```
+####Normalized counts
+```{r}
+normalized_counts <- counts(dds, normalized=TRUE)
+
+write.csv(normalized_counts, file="./results/mutualistic_normalized_counts_DESeq2.csv")
+```
+
+##PCA plot
+
+Principal Component Analysis (PCA): is a unsupervised, dimensionality reduction technique that transforms a large dataset (high-dimensional data) into a lower-dimensional coordinate system (often 2D), while maintaining the variability of information as much as possible via principal components. Those principal components capture the greatest variance within the data.
+
+In this analysis, PCA is applied to assess the similarity among replicates across different samples as a sample-level quality control technique. With PCA, outliers and potential batch effects (e.g. different reagents) confounding the true biological results can be detected and visualized. The samples within two groups are expected to cluster tightly, indicating that the experimental condition is the main driver of the variation captured by principal components.       
+
+```{r}
+library(ggplot2)
+library(ggrepel)
+```
+
+Log transformation is applied to correct the skewness of normalized counts to improve the distance calculation across samples and then enhance the quality of clustering. Log2 transformation is typically used in PCA; however, regularized log (rlog) transformation is applied in this analysis instead.Rlog helps reduce the bias that might be introduced by low-count genes when using log2 transform (log2(count +1)). By log2 transform, low-count genes can exaggerate its expression values, for example: 
+
+log2(1+1)=1 and log2(0+1)=0
+
+In raw counts, the difference between 0 and 1 is negligible. However, on the log scale, the difference of 1 unit is proportionally large. Hence, low-count genes can introduce noise into the dataset by inflating their expression value after log transformation.    
+
+```{r}
+#Log transfromation
+rld <- rlog(dds, blind=TRUE)
+
+pdf("./results/PlotPCA_dds.pdf")
+#PCA data
+pcaData <- plotPCA(rld, intgroup="sampletype", returnData=TRUE)
+pcaData$sample <- rownames(pcaData)
+percentVar <- round(100 * attr(pcaData, "percentVar"))
+
+#Create the plot
+p <- ggplot(pcaData, aes(PC1, PC2, color=sampletype, label=sample)) +
+  geom_point(size=3) +
+  geom_text_repel() +  #Optional: for better label spacing
+  xlab(paste0("PC1: ", percentVar[1], "% variance")) +
+  ylab(paste0("PC2: ", percentVar[2], "% variance")) +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5)) +  #Center the title
+  ggtitle("PCA plot") 
+
+#Render the plot into .pdf
+print(p)
+dev.off()
+```
+
+```{r}
+print(p)
+```
+Results for PCA: PCA with rlog-transformed normalized counts shows distinguishable clusters for samples within Sl and control groups. The two clusters are separated along the PC2 with 24% of variance. The samples within each experimental group demonstrate a high variability, in which Sl2 and Ctr3 samples are more dispersed along the PC1 with 42% of variance compared to the others.            
+
+##Heatmap
+
+Hierarchical Clustering Heatmap: is another sample-level quality control technique complementary to PCA. Gene expression profiles across all pairwise combinations across samples are visualized in the heatmap with their similarity and dissimilarity, in which identifies the clustering patterns and potential outliers. Samples are generally expected with high correlations with each other (>0.8), as most genes are not differentially expressed. Otherwise, below 0.8 threshold indicates a sample outlier in the dataset or potential sample contamination.    
+
+```{r}
+#Extract rlog matrix
+rld_mat <- assay(rld)
+
+#Compute pairwise correlation values for all samples
+rld_cor <- cor(rld_mat) 
+
+head(rld_cor)
+head(meta)
+```
+
+```{r}
+#Heatmap
+library(pheatmap)
+library(RColorBrewer)
+
+heat.colors <- RColorBrewer::brewer.pal(6, "Blues")
+
+# Show heatmap interactively
+pheatmap(rld_cor, annotation = meta, 
+         color = heat.colors, border_color=NA, 
+         fontsize = 10, fontsize_row = 10, height=20, 
+         main = "Heatmap"
+        )
+```
+Results for heatmap: In general, all samples have high correlations with each other (>0.9). However, their gene expression profiles are not highly distinguishable, showing a blending across samples instead of separately grouping together: Ctr3 sample is blending in the Sl samples.       
+
+```{r}
+#save pdf
+pdf("./results/PlotHeatmap_dds.pdf")
+pheatmap(rld_cor, annotation = meta, 
+         color = heat.colors, border_color=NA, 
+         fontsize = 10, fontsize_row = 10, height=20, 
+         main = "Heatmap"
+        )
+dev.off()
+```
+
+##EdgeR: DEA
+
+EdgeR requires raw integer read counts (un-normalized) as input -> it will perform its own normalization: TMM factors.  
+
+####Load packages
+```{r}
+library(edgeR)
+options(digits=3)
+library(ggplot2)
+```
+
+```{r}
+#read file
+mutualistic.targets<-read.delim("./data/fileDesc.txt")
+
+rownames(mutualistic.targets)<-c("Sl1","Sl2","Sl3","Ctr1","Ctr2","Ctr3")
+
+mutualistic <- readDGE(mutualistic.targets, header=F)
+dim(mutualistic)
+head(mutualistic)
+```
+
+```{r}
+mutualistic.rawCount <- mutualistic$count
+head(mutualistic.rawCount)
+```
+
+####Raw count distribution: raw counts before filtering 
+
+```{r}
+ggplot(Mutualistic.rawCount) +
+  geom_histogram(aes(x = Sl1), stat = "bin", bins = 200) +
+  xlab("Raw expression counts") +
+  ylab("Number of genes") +
+  theme(plot.title = element_text(hjust = 0.5)) +  #Center the title
+  ggtitle("Raw count distribution") +  
+  coord_cartesian(xlim = c(0, 7000), ylim = c(0, 50000)) #Adjust limits
+```
+Results for raw count distribution: Most raw expression counts range from 0 to 2000, with nearly 45000 genes detected within this range. A large number of genes with 0 raw count is high, so it requires a proper filter to keep relevant, sufficiently expressed genes in the downstream analysis. 
+
+```{r}
+#save png
+png("./results/count_distribution.png", res=300, height=1800, width=1800)
+ggplot(Mutualistic.rawCount) +
+  geom_histogram(aes(x = Sl1), stat = "bin", bins = 200) +
+  xlab("Raw expression counts") +
+  ylab("Number of genes") +
+  theme(plot.title = element_text(hjust = 0.5)) +  #Center the title
+  ggtitle("Raw count distribution") +  
+  coord_cartesian(xlim = c(0, 7000), ylim = c(0, 50000)) #Adjust limits
+dev.off()
+```
+
+####Normalization: CPM normalized using TMM factors
+
+Trimmed Mean of M-values (TMM): use weighted trimmed mean of the log expression ratios across samples to correct sequencing depth (library size) and RNA composition (relative abundance of different RNA species) differences.
+
+Counts Per Million (CPM): to normalize the gene expression across samples, which only takes library size (total reads per sample) into consideration. 
+normalized count(ij) = raw counts(ij)/total counts(j) x 10^6  
+
+CPM normalized using TMM factors can reduce the bias caused by RNA compositional differences, better reflecting the true biological variation across samples compared to CPM alone. 
+
+```{r}
+#save raw count
+write.csv(Mutualistic.rawCount, file="./results/Mutualistic.rawCounts.csv")
+```
+
+```{r}
+#get normalized TMM before filtering
+mutualistic.normCPM <- cpm(calcNormFactors(mutualistic)) #calcNormFactors: TMM
+
+dim(mutualistic.normCPM)
+head(mutualistic.normCPM)
+
+#save normalized counts
+write.csv(mutualistic.normCPM, file="./results/mutualistic.normCPM.csv")
+```
+
+####Filtering: Keep genes that are expressed at least 1 CPM in at least 3 libraries (samples), normally it is the number of biological replicates of smaller group  
+
+```{r}
+mutualistic.filtered <- rowSums(cpm(mutualistic)>1) >=3
+
+table(mutualistic.filtered)
+
+#save filtered file
+mutualistic.filtered.normCPM <- mutualistic.normCPM[mutualistic.filtered,]
+
+write.csv(mutualistic.filtered.normCPM, file="./results/mutualistic.filtered.normCPM.csv")
+```
+Results after filtering: 25,664 genes are kept after filtering  
+
+```{r}
+#lib size before filtering
+mutualistic$samples$lib.size
+
+#lib size after filtering
+Mutualistic <- mutualistic[mutualistic.filtered,]
+colSums(Mutualistic$counts)
+dim(Mutualistic)
+```
+```{r}
+#Update the filtered lib size
+Mutualistic$samples$lib.size <- colSums(Mutualistic$counts)
+Mutualistic$samples
+```
+
+####Experimental design
+```{r}
+group<-factor(c('Sl','Sl','Sl',"Ctr","Ctr","Ctr"))
+
+Mutualistic.design <- model.matrix(~group)   
+rownames(Mutualistic.design)<-colnames(Mutualistic$counts)
+Mutualistic.design
+```
+
+####Sample-level quality control by multidimensional scaling (MDS)
+
+Multidimensional Scaling (MDS): is applied as a sample-level quality control technique as PCA to cluster the different experimental groups based on their distance. Different from PCA maximizing the variance between groups by finding principal components, MDS uses pairwise distance matrix calculated by leading log-fold changes (logFC) on top genes and aims to preserve those distances as accurately as possible in a low-dimensional space.          
+
+```{r}
+plotMDS(Mutualistic, main="MDS plot of Mutualistic RNA-Seq", labels=colnames(Mutualistic$counts))
+```
+
+Results for MDS: Two experimental groups are distinctly clustered along the leading logFC dim 2 (21%), consistent with the clusters observed in PCA plot. In addition, Sl2 and Ctr3 samples demonstrate a greater dispersion (greater distance) compared to other samples within their respective groups along the leading logFC dim 1 (32%).     
+```{r}
+#save png
+png("./results/plotMDS.Mutualistic.png", res=300, height=1800, width=1800)
+plotMDS(Mutualistic, main="MDS plot of Mutualistic RNA-Seq", labels=colnames(Mutualistic$counts))
+dev.off()
+```
+
+####Estimating the common dispersion, trended dispersion, tagwwise dispersion
+
+Biological Coefficient of Variation (BCV): to quantify the biological variability (natural differences) in gene expression among biological replicates. 
+
+Dispersion = BCV squared
+
+BCV plot: helps assess how variability behaves across expression levels and whether dispersion estimates are reasonable
+
+```{r}
+#prepare the data to fit a Negative Biomial (NB) model with realistic, gene-level variability estimates
+
+#common dispersion across all genes -> overall measure of biological variability in the dataset
+Mutualistic <- estimateGLMCommonDisp(Mutualistic, Mutualistic.design)
+#trended dispersion as a function of gene abundance (mean counts) -> the trend that dispersion often changes with expression level
+Mutualistic <- estimateGLMTrendedDisp(Mutualistic, Mutualistic.design)
+#tagwise dispersion: (gene-specific) dispersion with empirical Bayes shrinkage -> borrow info across genes to stabilize estimates: more accurate modeling of variability at the gene level   
+Mutualistic <- estimateGLMTagwiseDisp(Mutualistic, Mutualistic.design)
+```
+
+```{r}
+#the mean-variance relationship and BCV-mean logCPM relationship
+plotMeanVar(Mutualistic, show.tagwise.vars=TRUE, NBline=TRUE) #to check how well the observed gene-wise variances follow the NB expectation. 
+plotBCV(Mutualistic) #to show how BCV changes with gene expression.
+
+#-> These plots help visualize how well the dispersions were estimated to ensure the differential expression results will be reliable and interpretable.
+```
+
+plotMeanVar: data points are clustered around NB line (blue), indicating a good fit with the NB model and supporting the validity of downstream differential expression analysis.
+
+plotBCV: the trended dispersion indicates a decreasing trend with expression level, with a larger dispersion observed at low logCPM. This pattern is expected in RNAseq data, as low-expressed genes are more variable and less stable than highly-expressed genes. 
+
+####Fit DGEList and design matrix to genewise GLM
+```{r}
+Mutualistic.fit <- glmFit(Mutualistic, Mutualistic.design)
+colnames(Mutualistic.fit)
+```
+```{r}
+lrt.Sl_vs_Ctr <- glmLRT(Mutualistic.fit, coef=2)  # to compare Sl vs Ctr (Sl_vs_Ctr)
+
+t1 <-topTags(lrt.Sl_vs_Ctr, n=nrow(Mutualistic))
+head(t1$table)
+```
+
+####Extract number of differentially expressed (DE) genes
+```{r}
+summary(decideTests(lrt.Sl_vs_Ctr, adjust.method="BH", p.value=0.05))
+```
+Results for DEGs: There are 115 DEGs in total (51: up-regulated genes, 64: down-regulated genes). There are more down DEGs than up DEGs. 
+
+```{r}
+#Up-regulated genes with all differential expressed gens in treatment 
+nrow(subset(topTags(lrt.Sl_vs_Ctr, n=116)$table,  logFC > 0)) #top differential expressed genes: 51 + 64 + 1
+
+lrt.Sl_vs_Ctr_UP <- subset(topTags(lrt.Sl_vs_Ctr, n=116)$table, logFC > 0) 
+
+nrow(subset(topTags(lrt.Sl_vs_Ctr, n=116)$table,  logFC < 0))
+
+lrt.Sl_vs_Ctr_DW <- subset(topTags(lrt.Sl_vs_Ctr, n=116)$table, logFC < 0)
+```
+
+####Differentially expressed transcripts’ tag
+```{r}
+DEtags.lrt.Sl_vs_Ctr <- rownames(Mutualistic)[as.logical(decideTests(lrt.Sl_vs_Ctr, adjust.method="BH", p.value=0.05))]
+
+#save files
+write.csv(lrt.Sl_vs_Ctr_UP, file="./results/lrt.Sl_vs_Ctr_UP.csv")
+write.csv(lrt.Sl_vs_Ctr_DW, file="./results/lrt.Sl_vs_Ctr_DW.csv")
+```
+
+```{r}
+#label genes with gray color
+Mutualistic.colSlvsCtr = rep('grey55', nrow(Mutualistic))
+
+#assign color for DE transcripts
+Mutualistic.colSlvsCtr[lrt.Sl_vs_Ctr$table$PValue < 0.05 & lrt.Sl_vs_Ctr$table$logFC >0 ] <- "red"
+Mutualistic.colSlvsCtr[lrt.Sl_vs_Ctr$table$PValue < 0.05 & lrt.Sl_vs_Ctr$table$logFC <0 ] <- "blue"
+```
+
+```{r}
+#plot Smear plot
+par(omi=c(0.1,0.1,0.1,0.1), las=1, cex=0.5, mgp=c(3,1,0), cex.main=1.8, cex.lab=1.4, cex.axis=1.4)
+par(omi=c(0.1,0.1,0.1,0.1), las=1, cex=0.5, mgp=c(3,1,0), cex.main=1.8, cex.lab=1.4, cex.axis=1.4)
+plotSmear(lrt.Sl_vs_Ctr, xlab="log-counts per million (logCPM)", ylab="log2-fold change (log2FC)", main="Mutual benefit between Suillus luteus and Control", smearWidth=0.5, pch=21, cex=0.4, deCol="red", col=Mutualistic.colSlvsCtr, ylim=c(-7,7), yaxs="i")
+
+abline(h=c(-1,1),col="dodgerblue")
+```
+
+```{r}
+#save png
+png("./results/plotSmear.MutualisticRNAseq.png", res=300, height=1800, width=1800)
+par(omi=c(0.1,0.1,0.1,0.1), las=1, cex=0.5, mgp=c(3,1,0), cex.main=1.8, cex.lab=1.4, cex.axis=1.4)
+par(omi=c(0.1,0.1,0.1,0.1), las=1, cex=0.5, mgp=c(3,1,0), cex.main=1.8, cex.lab=1.4, cex.axis=1.4)
+plotSmear(lrt.Sl_vs_Ctr, xlab="log-counts per million (logCPM)", ylab="log2-fold change (log2FC)", main="Mutual benefit between Suillus luteus and Control", smearWidth=0.5, pch=21, cex=0.4, deCol="red", col=Mutualistic.colSlvsCtr, ylim=c(-7,7), yaxs="i")
+
+abline(h=c(-1,1),col="dodgerblue")
+dev.off()
+```
+##Discussion: 
+
+1. Comparison in the number of DEGs between Sl, Ha, and control groups:   
+
+```{r}
+#Read DEGs from two analyses
+up_Sl_vs_Ctr <- read.csv("./results/lrt.Sl_vs_Ctr_UP.csv", header = TRUE)
+dw_Sl_vs_Ctr <- read.csv("./results/lrt.Sl_vs_Ctr_DW.csv", header = TRUE)
+
+up_Ha_vs_Ctr <- read.csv("./results/lrt.Ha_vs_Ctr_UP.csv", header = TRUE) #file obtained from Chloé's analysis 
+dw_Ha_vs_Ctr <- read.csv("./results/lrt.Ha_vs_Ctr_DW.csv", header = TRUE) #file obtained from Chloé's analysis
+```
+
+```{r}
+cat("There are", nrow(up_Sl_vs_Ctr), "UP DEGs in Sl vs Ctr.\n")
+cat("There are", nrow(dw_Sl_vs_Ctr), "DOWN DEGs in Sl vs Ctr.\n")
+cat("There are", nrow(up_Ha_vs_Ctr), "UP DEGs in Ha vs Ctr.\n")
+cat("There are", nrow(dw_Ha_vs_Ctr), "DOWN DEGs in Ha vs Ctr.\n")
+```
+There are more DEGs (both up and down-regulated ones) observed in Ha infection than in Sl treatment compared to the control group. 
+
+2. Comparison in the shared DEGs between Sl, Ha, and control groups:
+
+```{r}
+common_up_degs <- intersect(up_Sl_vs_Ctr$X, up_Ha_vs_Ctr$X)
+cat("There are", length(common_up_degs), "common UP DEGs in Sl_vs_Ctr and Ha_vs_Ctr.\n")
+common_up_degs
+```
+```{r}
+common_dw_degs <- intersect(dw_Sl_vs_Ctr$X, dw_Ha_vs_Ctr$X)
+cat("There are", length(common_dw_degs), "common DOWN DEGs in Sl_vs_Ctr and Ha_vs_Ctr.\n")
+common_dw_degs
+```
+There are 12 UP DEGs overlapping in both Ha infection and Sl treatment, while there are no common DOWN DEGs between these two treatment conditions compared to the control group. 
+
