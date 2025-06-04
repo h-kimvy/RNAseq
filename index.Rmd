@@ -467,4 +467,4 @@ cat("There are", length(common_dw_degs), "common DOWN DEGs in Sl_vs_Ctr and Ha_v
 common_dw_degs
 ```
 There are 12 UP DEGs overlapping in both Ha infection and Sl treatment, while there are no common DOWN DEGs between these two treatment conditions compared to the control group. 
-
+In general, Ha group has a greater effect on Scots pine roots compared to Sl group, which demonstrated through the higher number of DEGs. In both treatment conditions, there are 12 UP DEGs shared among them, which are severely impacted.    
